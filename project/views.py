@@ -1,45 +1,61 @@
 import requests
 import base64
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from .models import Project
-from .serializers import ProjectSerializer, ProjectListSerializer
+from .models import Project, Comment
+from .serializers import ProjectSerializer, ProjectListSerializer, ProjectDetailSerializer, CommentSerializer
+
 
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
-    serializer_class = ProjectSerializer
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProjectListSerializer  # 목록 조회용
+        elif self.action == 'retrieve':
+            return ProjectDetailSerializer  # 상세 조회용
+        return ProjectSerializer  # 생성/수정용
 
     def perform_create(self, serializer):
-        # 임시로 score 기본값 0 설정
-        score = 0
+        # 프로젝트 생성 후 점수 계산 요청
+        project = serializer.save()
+        self._update_project_score(project)
 
-        # Project 인스턴스를 생성하여 코드 파일을 가져옵니다.
-        project = serializer.save(score=score)
-        code_file = project.code
-
-        # 모델 URL에 JSON 형식으로 파일을 전송하여 점수 요청
+    def _update_project_score(self, project):
+        """Flask 모델 서버로 점수를 요청하고 업데이트"""
         try:
-            with open(code_file.path, 'rb') as file:
-                # 파일 내용을 base64로 인코딩하여 "code" 키로 전송
-                file_data = base64.b64encode(file.read()).decode('utf-8')
-                payload = {
-                    "code": file_data  # Flask 서버가 기대하는 "code" 키로 수정
-                }
-                headers = {'Content-Type': 'application/json'}
-                response = requests.post("https://sozerong.pythonanywhere.com/random", json=payload, headers=headers)
+            file_data = base64.b64encode(project.code).decode('utf-8')
+            payload = {"code": file_data}
+            headers = {'Content-Type': 'application/json'}
+            response = requests.post("https://sozerong.pythonanywhere.com/random", json=payload, headers=headers)
             response.raise_for_status()
-            score = response.json().get("score", 0)
+            project.score = response.json().get("score", 0)
         except requests.RequestException:
-            score = 0  # 요청 실패 시 기본값 0 설정
-
-        # 업데이트된 점수로 다시 저장
-        project.score = score
+            project.score = 0
         project.save()
 
     @action(detail=False, methods=['get'], url_path='list')
     def project_list(self, request):
-        # 목록 조회 시 필요한 필드만 반환하기 위해 ProjectListSerializer 사용
+        # 프로젝트 목록 조회
         queryset = self.get_queryset()
-        serializer = ProjectListSerializer(queryset, many=True)
+        serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'post'], url_path='comments')
+    def project_comments(self, request, pk=None):
+        project = self.get_object()
+
+        if request.method == 'GET':
+            # 댓글 목록 조회
+            comments = project.comments.all()
+            serializer = CommentSerializer(comments, many=True)
+            return Response(serializer.data)
+
+        if request.method == 'POST':
+            # 댓글 추가
+            serializer = CommentSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save(project=project)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

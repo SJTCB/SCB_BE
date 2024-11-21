@@ -22,6 +22,8 @@ from django.urls import path, include
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('project.urls')),
+    
+    
 ]
 
 # MEDIA_URL 경로 추가
