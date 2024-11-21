@@ -4,41 +4,44 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import Project, Comment
-from .serializers import ProjectSerializer, CommentSerializer
-
+from .serializers import ProjectSerializer, ProjectListSerializer, CommentSerializer
 
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
 
     def list(self, request, *args, **kwargs):
-        # 데이터 반환 없이 메시지만 전달
+        # 기본 메시지 반환
         return Response({"message": "This endpoint is for project creation only."}, status=status.HTTP_200_OK)
 
-    def perform_create(self, serializer):
-        # 임시로 score 기본값 0 설정
-        score = 0
+    @action(detail=False, methods=['get'], url_path='list')
+    def custom_list(self, request):
+        """
+        GET: 모든 프로젝트의 팀명, 팀원, 점수, 내용을 반환
+        """
+        projects = Project.objects.all()
+        serializer = ProjectListSerializer(projects, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-        # Project 인스턴스를 생성하여 코드 파일을 가져옵니다.
+    def perform_create(self, serializer):
+        # 기본 점수 0으로 설정
+        score = 0
         project = serializer.save(score=score)
         code_file = project.code
 
-        # 모델 URL에 JSON 형식으로 파일을 전송하여 점수 요청
+        # 모델 URL로 파일 전송 및 점수 요청
         try:
             with open(code_file.path, 'rb') as file:
-                # 파일 내용을 base64로 인코딩하여 "code" 키로 전송
                 file_data = base64.b64encode(file.read()).decode('utf-8')
-                payload = {
-                    "code": file_data  # Flask 서버가 기대하는 "code" 키로 수정
-                }
+                payload = {"code": file_data}
                 headers = {'Content-Type': 'application/json'}
                 response = requests.post("https://sozerong.pythonanywhere.com/random", json=payload, headers=headers)
             response.raise_for_status()
             score = response.json().get("score", 0)
         except requests.RequestException:
-            score = 0  # 요청 실패 시 기본값 0 설정
+            score = 0  # 요청 실패 시 기본값
 
-        # 업데이트된 점수로 다시 저장
+        # 점수 저장
         project.score = score
         project.save()
 
@@ -63,7 +66,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             # 특정 프로젝트에 댓글 생성
             serializer = CommentSerializer(data=request.data)
             if serializer.is_valid():
-                serializer.save(project=project)  # project를 URL의 프로젝트로 설정
+                serializer.save(project=project)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
