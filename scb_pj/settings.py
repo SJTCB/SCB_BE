@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+from decouple import config
 import os
 
 
@@ -87,7 +88,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'project_db',
         'USER' : 'root',
-        'PASSWORD' : config('MYSQL_PASSWORD')', # 설정한 비밀번호로 적어주면 된다.
+        'PASSWORD' : config('MYSQL_PASSWORD'), # 설정한 비밀번호로 적어주면 된다.
         'HOST' : '127.0.0.1',
         'PORT' : '3306',
     }
