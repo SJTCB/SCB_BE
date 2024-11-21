@@ -12,12 +12,12 @@ class CommentSerializer(serializers.ModelSerializer):
 
 # Project 생성 시 사용되는 Serializer
 class ProjectSerializer(serializers.ModelSerializer):
-    code_file = serializers.FileField(write_only=True, required=True)  # 업로드용 파일 필드 추가
+    code_file = serializers.FileField(write_only=True, required=True)  # 생성 시에만 필요한 필드
 
     class Meta:
         model = Project
-        fields = ['team_name', 'team_members', 'comment', 'code_file']  # score 필드 제거
-        read_only_fields = ['score']  # score는 자동으로 처리되므로 입력받지 않음
+        fields = ['team_name', 'team_members', 'comment', 'code_file']  # 수정 시 code_file 제거
+        read_only_fields = ['score', 'code']  # score와 code는 읽기 전용
 
     def create(self, validated_data):
         # code_file 데이터를 바이너리로 변환해 code 필드에 저장
@@ -27,11 +27,18 @@ class ProjectSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+# Project 수정 및 상세 조회에 사용되는 Serializer
+class ProjectUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = ['team_name', 'team_members', 'comment']  # code_file 필드 제거
+
+
 # Project 목록 조회 시 사용되는 Serializer
 class ProjectListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
-        fields = ['id', 'team_name', 'team_members', 'score']  # code 필드 제외
+        fields = ['id', 'team_name', 'team_members', 'score', 'comment']  # code 필드 제외
 
 
 # Project 상세 조회 시 사용되는 Serializer (code 포함)

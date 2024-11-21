@@ -4,7 +4,7 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import Project, Comment
-from .serializers import ProjectSerializer, ProjectListSerializer, ProjectDetailSerializer, CommentSerializer
+from .serializers import ProjectSerializer, ProjectListSerializer,ProjectUpdateSerializer, ProjectDetailSerializer, CommentSerializer
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -15,12 +15,17 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return ProjectListSerializer  # 목록 조회용
         elif self.action == 'retrieve':
             return ProjectDetailSerializer  # 상세 조회용
-        return ProjectSerializer  # 생성/수정용
+        elif self.action in ['update', 'partial_update']:
+            return ProjectUpdateSerializer  # 수정용
+        return ProjectSerializer  # 생성용
+
 
     def perform_create(self, serializer):
         # 프로젝트 생성 후 점수 계산 요청
         project = serializer.save()
         self._update_project_score(project)
+
+        
 
     def _update_project_score(self, project):
         """Flask 모델 서버로 점수를 요청하고 업데이트"""
@@ -39,7 +44,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def project_list(self, request):
         # 프로젝트 목록 조회
         queryset = self.get_queryset()
-        serializer = self.get_serializer(queryset, many=True)
+        serializer = ProjectListSerializer(queryset, many=True)  # 올바른 Serializer 사용
         return Response(serializer.data)
 
     @action(detail=True, methods=['get', 'post'], url_path='comments')
