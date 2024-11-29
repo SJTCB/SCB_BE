@@ -1,17 +1,16 @@
+import zipfile
 import requests
-import base64
-from rest_framework import viewsets, status
-from rest_framework.response import Response
+import io
+import json
 from rest_framework.decorators import action
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
+from rest_framework.response import Response
+from rest_framework import viewsets, status
 from .models import Project, Comment
 from .serializers import (
     ProjectSerializer,
     ProjectListSerializer,
-    ProjectUpdateSerializer,
     ProjectDetailSerializer,
-    CommentSerializer,
+    CommentSerializer
 )
 
 
@@ -19,88 +18,134 @@ class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
 
     def get_serializer_class(self):
-        """Swagger의 fake_view를 처리하여 적절한 serializer 반환"""
-        if getattr(self, "swagger_fake_view", False):
-            # Swagger를 위한 기본 serializer 반환
-            return ProjectSerializer
-
-        if self.action == "list":
-            return ProjectListSerializer  # 목록 조회용
-        elif self.action == "retrieve":
-            return ProjectDetailSerializer  # 상세 조회용
-        elif self.action in ["update", "partial_update"]:
-            return ProjectUpdateSerializer  # 수정용
-        return ProjectSerializer  # 생성용
-
-
-
-    @swagger_auto_schema(auto_schema=None)  # Swagger 문서에서 제외
-    def list(self, request, *args, **kwargs):
-        return Response(
-            {"message": "This endpoint is not available."},
-            status=status.HTTP_405_METHOD_NOT_ALLOWED
-        )
+        """Serializer 반환"""
+        if self.action == 'list':
+            return ProjectListSerializer  # 목록 조회
+        elif self.action in ['retrieve', 'list_detail']:
+            return ProjectDetailSerializer  # 세부사항 조회
+        return ProjectSerializer  # 생성/수정용
 
     def perform_create(self, serializer):
-        """프로젝트 생성 후 점수 계산 요청"""
-        project = serializer.save()
+        """프로젝트 생성"""
+        # ZIP 파일 데이터 저장
+        code_file = serializer.validated_data['code_file']  # 업로드된 ZIP 파일
+        zip_data = code_file.read()  # ZIP 파일의 바이너리 데이터를 읽음
+
+        project = serializer.save(code=zip_data)  # 원본 데이터를 code 필드에 저장
+
+        try:
+            # ZIP 파일 처리
+            with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zf:
+                # ZIP 파일의 최상위 디렉토리 추출
+                if zf.namelist():
+                    top_level = zf.namelist()[0].split('/')[0]  # 최상위 디렉토리 이름
+                else:
+                    top_level = "Unknown"
+
+                # 최상위 디렉토리 이름을 zip_name 필드에 저장
+                project.zip_name = top_level
+                project.save()
+
+        except zipfile.BadZipFile:
+            project.delete()  # 잘못된 ZIP 파일인 경우 삭제
+            raise ValueError("Invalid ZIP file uploaded.")
+
+        # AI 모델에 점수 업데이트 요청
         self._update_project_score(project)
 
+
+
+
+
     def _update_project_score(self, project):
-        """Flask 모델 서버로 점수를 요청하고 업데이트"""
+        """AI 모델로 점수 계산 및 업데이트"""
         try:
-            file_data = base64.b64encode(project.code).decode("utf-8")
+            file_data = project.code.hex()  # BinaryField 데이터를 HEX로 변환
             payload = {"code": file_data}
-            headers = {"Content-Type": "application/json"}
+            headers = {'Content-Type': 'application/json'}
             response = requests.post(
                 "https://sozerong.pythonanywhere.com/random",
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            project.score = response.json().get("score", 0)
+            project.score = response.json().get("score", 0.0)
         except requests.RequestException:
-            project.score = 0
+            project.score = 0.0
         project.save()
 
-    @swagger_auto_schema(
-        operation_summary="프로젝트 목록 조회",
-        operation_description="등록된 모든 프로젝트 목록을 반환합니다.",
-        responses={200: ProjectListSerializer(many=True)},
-    )
-    @action(detail=False, methods=["get"], url_path="list")
+    @action(detail=False, methods=['get'], url_path='list')
     def project_list(self, request):
         """프로젝트 목록 조회"""
         queryset = self.get_queryset()
         serializer = ProjectListSerializer(queryset, many=True)
         return Response(serializer.data)
 
-    @swagger_auto_schema(
-        method="get",
-        operation_summary="특정 프로젝트 댓글 조회",
-        operation_description="특정 프로젝트의 댓글 목록을 반환합니다.",
-        responses={200: CommentSerializer(many=True)},
-    )
-    @swagger_auto_schema(
-        method="post",
-        operation_summary="특정 프로젝트 댓글 추가",
-        operation_description="특정 프로젝트에 댓글을 추가합니다.",
-        request_body=CommentSerializer,
-        responses={201: "댓글 추가 성공", 400: "유효하지 않은 데이터"},
-    )
-    @action(detail=True, methods=["get", "post"], url_path="comments")
-    def project_comments(self, request, pk=None):
-        """특정 프로젝트 댓글 처리"""
-        project = self.get_object()
+    @action(detail=False, methods=['get'], url_path='list/(?P<id>[^/.]+)')
+    def list_detail(self, request, id=None):
+        """특정 프로젝트 세부사항 조회"""
+        try:
+            project = Project.objects.get(id=id)
+        except Project.DoesNotExist:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.method == "GET":
+        comments = project.comments.all()
+        comment_serializer = CommentSerializer(comments, many=True)
+
+        response_data = {
+            "id": project.id,
+            "team_name": project.team_name,
+            "team_members": project.team_members,
+            "score": project.score,
+            "code": project.zip_name,  # 최상위 디렉토리 이름 반환
+            "comment": project.comment,
+            "comments": comment_serializer.data,
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+
+
+
+
+    @action(detail=False, methods=['get', 'post'], url_path='list/(?P<id>[^/.]+)/comments')
+    def list_comments(self, request, id=None):
+        """댓글 조회 및 추가"""
+        try:
+            project = Project.objects.get(id=id)
+        except Project.DoesNotExist:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.method == 'GET':
             comments = project.comments.all()
             serializer = CommentSerializer(comments, many=True)
             return Response(serializer.data)
 
-        if request.method == "POST":
+        if request.method == 'POST':
             serializer = CommentSerializer(data=request.data)
             if serializer.is_valid():
                 serializer.save(project=project)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'], url_path='list/(?P<id>[^/.]+)/code-preview')
+    def code_preview(self, request, id=None):
+        """ZIP 파일의 텍스트 파일 내용 미리보기"""
+        try:
+            project = Project.objects.get(id=id)
+
+            zip_data = io.BytesIO(project.code)  # BinaryField에서 ZIP 파일 데이터를 가져오기
+            code_contents = {}
+            with zipfile.ZipFile(zip_data, 'r') as zf:
+                for file_name in zf.namelist():
+                    if file_name.endswith(('.py', '.java', '.js', '.html', '.txt')):
+                        with zf.open(file_name) as file:
+                            code_contents[file_name] = file.read().decode('utf-8')
+
+            return Response(code_contents, status=status.HTTP_200_OK)
+
+        except Project.DoesNotExist:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        except zipfile.BadZipFile:
+            return Response({"error": "Invalid ZIP file format."}, status=status.HTTP_400_BAD_REQUEST)
+

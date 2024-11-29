@@ -1,3 +1,5 @@
+#project serializers.py
+
 from rest_framework import serializers
 from .models import Project, Comment
 import base64
@@ -12,20 +14,19 @@ class CommentSerializer(serializers.ModelSerializer):
 
 # Project 생성 시 사용되는 Serializer
 class ProjectSerializer(serializers.ModelSerializer):
-    code_file = serializers.FileField(write_only=True, required=True)  # 생성 시에만 필요한 필드
+    code_file = serializers.FileField(write_only=True, required=True)  # ZIP 파일 업로드
 
     class Meta:
         model = Project
-        fields = ['team_name', 'team_members', 'comment', 'code_file']  # 수정 시 code_file 제거
-        read_only_fields = ['score', 'code']  # score와 code는 읽기 전용
+        fields = ['team_name', 'team_members', 'comment', 'code_file']  # code_file 추가
+        read_only_fields = ['score', 'code']  # 읽기 전용 필드
 
     def create(self, validated_data):
-        # code_file 데이터를 바이너리로 변환해 code 필드에 저장
-        code_file = validated_data.pop('code_file')
-        validated_data['code'] = code_file.read()  # BinaryField에 파일 데이터 저장
-        validated_data['score'] = 0  # 기본 score 값 설정
+        # 업로드된 ZIP 파일 데이터를 code 필드에 저장
+        code_file = validated_data.pop('code_file')  # code_file 데이터 가져오기
+        validated_data['code'] = code_file.read()  # BinaryField에 ZIP 데이터 저장
+        validated_data['score'] = 0  # 기본 점수 설정
         return super().create(validated_data)
-
 
 # Project 수정 및 상세 조회에 사용되는 Serializer
 class ProjectUpdateSerializer(serializers.ModelSerializer):
@@ -38,7 +39,7 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
 class ProjectListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
-        fields = ['id', 'team_name', 'team_members', 'score', 'comment']  # code 필드 제외
+        fields = ['id', 'team_name', 'team_members', 'score']  # code 필드 제외
 
 
 # Project 상세 조회 시 사용되는 Serializer (code 포함)

@@ -6,5 +6,5 @@ router = DefaultRouter()
 router.register(r'projects', ProjectViewSet)
 
 urlpatterns = [
-    path('', include(router.urls)),  # REST framework 라우터 연결
+    path('', include(router.urls)),
 ]
