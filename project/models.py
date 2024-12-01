@@ -6,7 +6,6 @@ class Project(models.Model):
     team_name = models.CharField(max_length=100)  # 팀 이름
     team_members = models.CharField(max_length=255)  # 팀 멤버 이름 (콤마로 구분)
     code = models.BinaryField()  # ZIP 파일 데이터를 저장
-    zip_name = models.CharField(max_length=255, blank=True)  # ZIP 파일 이름 저장
     top_level_directory = models.CharField(max_length=255, blank=True)  # 최상위 디렉토리 이름 저장
     score = models.FloatField(default=0.0)  # AI 점수
     description = models.TextField(blank=True)  # 사용자 입력 내용 또는 프로젝트 설명
