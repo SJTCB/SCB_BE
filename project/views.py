@@ -27,35 +27,28 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         """프로젝트 생성"""
-        # ZIP 파일 데이터 저장
-        code_file = serializer.validated_data['code_file']  # 업로드된 ZIP 파일
-        zip_data = code_file.read()  # ZIP 파일의 바이너리 데이터를 읽음
+        project = serializer.save()
 
-        project = serializer.save(code=zip_data)  # 원본 데이터를 code 필드에 저장
-
+        # ZIP 파일 처리 및 최상위 디렉토리 추출
         try:
-            # ZIP 파일 처리
-            with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zf:
-                # ZIP 파일의 최상위 디렉토리 추출
+            zip_data = io.BytesIO(project.code)  # BinaryField에서 ZIP 파일 데이터 가져오기
+            with zipfile.ZipFile(zip_data, 'r') as zf:
+                # 최상위 디렉토리 이름 추출
                 if zf.namelist():
-                    top_level = zf.namelist()[0].split('/')[0]  # 최상위 디렉토리 이름
+                    top_level = zf.namelist()[0].split('/')[0]
                 else:
                     top_level = "Unknown"
 
-                # 최상위 디렉토리 이름을 zip_name 필드에 저장
-                project.zip_name = top_level
+                # 최상위 디렉토리 이름 저장
+                project.comment = top_level
                 project.save()
 
         except zipfile.BadZipFile:
-            project.delete()  # 잘못된 ZIP 파일인 경우 삭제
+            project.delete()  # 잘못된 ZIP 파일 업로드 시 삭제
             raise ValueError("Invalid ZIP file uploaded.")
 
         # AI 모델에 점수 업데이트 요청
         self._update_project_score(project)
-
-
-
-
 
     def _update_project_score(self, project):
         """AI 모델로 점수 계산 및 업데이트"""
@@ -97,16 +90,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
             "team_name": project.team_name,
             "team_members": project.team_members,
             "score": project.score,
-            "code": project.zip_name,  # 최상위 디렉토리 이름 반환
-            "comment": project.comment,
+            "code": project.comment,  # 최상위 디렉토리 이름 반환
             "comments": comment_serializer.data,
         }
         return Response(response_data, status=status.HTTP_200_OK)
-
-
-
-
-
 
     @action(detail=False, methods=['get', 'post'], url_path='list/(?P<id>[^/.]+)/comments')
     def list_comments(self, request, id=None):
@@ -134,7 +121,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         try:
             project = Project.objects.get(id=id)
 
-            zip_data = io.BytesIO(project.code)  # BinaryField에서 ZIP 파일 데이터를 가져오기
+            zip_data = io.BytesIO(project.code)
             code_contents = {}
             with zipfile.ZipFile(zip_data, 'r') as zf:
                 for file_name in zf.namelist():
@@ -148,4 +135,3 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
         except zipfile.BadZipFile:
             return Response({"error": "Invalid ZIP file format."}, status=status.HTTP_400_BAD_REQUEST)
-
