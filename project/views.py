@@ -1,76 +1,153 @@
+import zipfile
 import requests
-import base64
-from rest_framework import viewsets, status
+import io
+from rest_framework.decorators import action 
 from rest_framework.response import Response
-from rest_framework.decorators import action
+from rest_framework import viewsets, status
 from .models import Project, Comment
-from .serializers import ProjectSerializer, ProjectListSerializer, CommentSerializer
+from .serializers import (
+    ProjectSerializer,
+    ProjectListSerializer,
+    ProjectDetailSerializer,
+    ProjectUpdateSerializer,
+    CommentSerializer
+)
+
 
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
+    http_method_names = ['get', 'post', 'patch', 'delete']  # PUT 제거
 
-    def list(self, request, *args, **kwargs):
-        # 기본 메시지 반환
-        return Response({"message": "This endpoint is for project creation only."}, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['get'], url_path='list')
-    def custom_list(self, request):
-        """
-        GET: 모든 프로젝트의 팀명, 팀원, 점수, 내용을 반환
-        """
-        projects = Project.objects.all()
-        serializer = ProjectListSerializer(projects, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    def get_serializer_class(self):
+        """Serializer 반환"""
+        if self.action == 'list':
+            return ProjectListSerializer  # 목록 조회
+        elif self.action == 'retrieve':
+            return ProjectDetailSerializer  # 세부사항 조회
+        elif self.action in ['update', 'partial_update']:
+            return ProjectUpdateSerializer  # 수정 요청 시 전용 Serializer 사용
+        return ProjectSerializer  # 생성/수정용
+
 
     def perform_create(self, serializer):
-        # 기본 점수 0으로 설정
-        score = 0
-        project = serializer.save(score=score)
-        code_file = project.code
+        """프로젝트 생성"""
+        project = serializer.save()
 
-        # 모델 URL로 파일 전송 및 점수 요청
+        # ZIP 파일 처리 및 최상위 디렉토리 추출
         try:
-            with open(code_file.path, 'rb') as file:
-                file_data = base64.b64encode(file.read()).decode('utf-8')
-                payload = {"code": file_data}
-                headers = {'Content-Type': 'application/json'}
-                response = requests.post("https://sozerong.pythonanywhere.com/random", json=payload, headers=headers)
-            response.raise_for_status()
-            score = response.json().get("score", 0)
-        except requests.RequestException:
-            score = 0  # 요청 실패 시 기본값
+            zip_data = io.BytesIO(project.code)  # BinaryField에서 ZIP 파일 데이터 가져오기
+            with zipfile.ZipFile(zip_data, 'r') as zf:
+                # 최상위 디렉토리 이름 추출
+                top_level_dir = zf.namelist()[0].split('/')[0] if zf.namelist() else "Unknown"
+                project.file_size = len(project.code)  # 파일 크기 (바이트 단위)
+                project.top_level_directory = top_level_dir  # 최상위 디렉토리 이름 저장
+                project.save()
+        except zipfile.BadZipFile:
+            project.delete()  # 잘못된 ZIP 파일 업로드 시 삭제
+            raise ValueError("Invalid ZIP file uploaded.")
 
-        # 점수 저장
-        project.score = score
+        # AI 모델에 점수 업데이트 요청
+        self._update_project_score(project)
+
+    def _update_project_score(self, project):
+        """AI 모델로 점수 계산 및 업데이트"""
+        try:
+            file_data = project.code.hex()  # BinaryField 데이터를 HEX로 변환
+            payload = {"code": file_data}
+            headers = {'Content-Type': 'application/json'}
+            response = requests.post(
+                "https://sozerong.pythonanywhere.com/random",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            project.score = response.json().get("score", 0.0)
+        except requests.RequestException:
+            project.score = 0.0
         project.save()
 
-    @action(detail=True, methods=['get', 'post'], url_path='comments')
-    def project_comments(self, request, pk=None):
-        """
-        GET: 특정 프로젝트의 댓글 목록 반환
-        POST: 특정 프로젝트에 댓글 추가
-        """
+    def destroy(self, request, *args, **kwargs):
+        """프로젝트 삭제"""
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response({"message": "Project deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+
+    def update(self, request, *args, **kwargs):
+        """프로젝트 수정"""
+        partial = kwargs.pop('partial', False)  # PATCH 요청 여부 확인
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        return Response({
+            "message": "Project successfully updated.",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='comments')
+    def list_comments(self, request, pk=None):
+        """특정 프로젝트 댓글 조회"""
         try:
             project = Project.objects.get(pk=pk)
         except Project.DoesNotExist:
-            return Response({"error": "Project not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.method == 'GET':
-            # 특정 프로젝트의 댓글 목록 조회
-            comments = project.comments.all()
-            serializer = CommentSerializer(comments, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+        comments = project.comments.all()
+        serializer = CommentSerializer(comments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-        if request.method == 'POST':
-            # 특정 프로젝트에 댓글 생성
-            serializer = CommentSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save(project=project)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    @action(detail=True, methods=['post'], url_path='comments')
+    def add_comment(self, request, pk=None):
+        """특정 프로젝트에 댓글 추가"""
+        try:
+            project = Project.objects.get(pk=pk)
+        except Project.DoesNotExist:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CommentSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(project=project)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class CommentViewSet(viewsets.ModelViewSet):
-    queryset = Comment.objects.all()
-    serializer_class = CommentSerializer
+
+    @action(detail=True, methods=['delete'], url_path='comments/(?P<comment_id>[^/.]+)')
+    def delete_comment(self, request, pk=None, comment_id=None):
+        """특정 프로젝트의 댓글 삭제"""
+        try:
+            project = self.get_object()  # 프로젝트 객체 가져오기
+            comment = project.comments.get(id=comment_id)  # 특정 댓글 가져오기
+            comment.delete()  # 댓글 삭제
+            return Response({"message": "Comment deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        except Comment.DoesNotExist:
+            return Response({"error": "Comment not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+    
+
+    @action(detail=True, methods=['get'], url_path='code-preview')
+    def code_preview(self, request, pk=None):
+        """ZIP 파일의 텍스트 파일 내용 미리보기"""
+        try:
+            project = Project.objects.get(pk=pk)
+
+            zip_data = io.BytesIO(project.code)
+            code_contents = {}
+            with zipfile.ZipFile(zip_data, 'r') as zf:
+                for file_name in zf.namelist():
+                    if file_name.endswith(('.py', '.java', '.js', '.html', '.txt')):
+                        with zf.open(file_name) as file:
+                            code_contents[file_name] = file.read().decode('utf-8')
+
+            return Response(code_contents, status=status.HTTP_200_OK)
+
+        except Project.DoesNotExist:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        except zipfile.BadZipFile:
+            return Response({"error": "Invalid ZIP file format."}, status=status.HTTP_400_BAD_REQUEST)
