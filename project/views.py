@@ -13,6 +13,17 @@ from .serializers import (
     CommentSerializer
 )
 
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from .models import Project
+
+class UserProjectListView(APIView):
+    def get(self, request, user_id):
+        """특정 사용자의 프로젝트 목록"""
+        projects = Project.objects.filter(user_id=user_id)
+        project_data = [{"id": project.id, "name": project.team_name} for project in projects]
+        return Response(project_data)
+
 
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
