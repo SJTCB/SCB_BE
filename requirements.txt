@@ -1,6 +1,5 @@
 asgiref==3.7.2
 attrs==24.2.0
-backports.zoneinfo==0.2.1
 certifi==2024.12.14
 charset-normalizer==3.4.1
 Django==3.2.25
