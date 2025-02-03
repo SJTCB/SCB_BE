@@ -20,6 +20,7 @@ ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     'port-0-scb-be-m5p35c12a9749b96.sel4.cloudtype.app',
+    'port-0-scb-be-m5papr2jabee49e1.sel4.cloudtype.app',
 ]
 
 # Application definition
